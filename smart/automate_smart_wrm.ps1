@@ -13,7 +13,6 @@ $outputFile = "SMART_RESULTS_WRM.csv"   # Path to save the results in CSV format
 $dhcpServer = "192.168.160.100"  # Replace with your DHCP server's IP address
 $scopeId = "192.168.160.0"  # Replace with your ScopeId (usually the network ID of your DHCP scope)
 # =====================================================================================================
-
 # Debug: Output the current working directory
 Write-Host "Current working directory: $(Get-Location)"
 
@@ -71,10 +70,8 @@ try {
 Write-Host "Found the following leases:"
 $leases | Format-Table ClientId, IPAddress, HostName
 
-# Define CSV column order
-$csvColumns = @("MAC Address", "IP Address", "Computer Name", "Drive Name", "Drive Status", "Disk Type")
-
-# Remove manual header writing - let Export-Csv handle the header automatically
+# Define CSV column order (updated to include Size)
+$csvColumns = @("MAC Address", "IP Address", "Computer Name", "Drive Name", "Drive Status", "Disk Type", "Size (GB)")
 
 # Loop through each MAC address
 foreach ($macAddress in $macAddresses) {
@@ -83,13 +80,10 @@ foreach ($macAddress in $macAddresses) {
     try {
         # Clean up the MAC address to match the DHCP server's format (ensure no dashes or colons)
         $macAddressFormatted = $macAddress -replace "[-:]", ""  # Ensure MAC is clean of any dashes or colons
-
         # Ensure the MAC address is in lowercase (match case sensitivity in DHCP leases)
         $macAddressFormatted = $macAddressFormatted.ToLower()
-
         # Debug: Check the formatted MAC address
         Write-Host "Searching for MAC Address: $macAddressFormatted"
-
         # Adjust ClientId to match the MAC address format (strip prefix if present)
         try {
             $leasesMatching = $leases | Where-Object { 
@@ -101,20 +95,20 @@ foreach ($macAddress in $macAddresses) {
             Write-Host $errorMessage
             continue
         }
-
         if ($leasesMatching) {
             # Get the IP address and hostname for the MAC address
             $ipAddress = $leasesMatching.IPAddress
             $hostName = $leasesMatching.HostName
-
-            # Always use Get-PhysicalDisk via Invoke-Command for disk health
+            # Always use Get-PhysicalDisk via Invoke-Command for disk health (updated to include Size)
             try {
                 $targetName = if ($hostName) { $hostName } else { $ipAddress }
                 $diskResults = Invoke-Command -ComputerName $targetName -ScriptBlock {
-                    Get-PhysicalDisk | Select FriendlyName, MediaType, HealthStatus
+                    Get-PhysicalDisk | Select FriendlyName, MediaType, HealthStatus, Size
                 }
                 if ($diskResults) {
                     foreach ($disk in $diskResults) {
+                        # Convert size from bytes to GB (rounded to 2 decimal places)
+                        $sizeGB = if ($disk.Size) { [math]::Round($disk.Size / 1GB, 2) } else { "N/A" }
                         $resultObj = [PSCustomObject]@{
                             'MAC Address'    = $macAddress
                             'IP Address'     = $ipAddress
@@ -122,6 +116,7 @@ foreach ($macAddress in $macAddresses) {
                             'Drive Name'     = $disk.FriendlyName
                             'Drive Status'   = $disk.HealthStatus
                             'Disk Type'      = $disk.MediaType
+                            'Size (GB)'      = $sizeGB
                         }
                         try {
                             $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
@@ -138,6 +133,7 @@ foreach ($macAddress in $macAddresses) {
                         'Drive Name'     = "N/A"
                         'Drive Status'   = "No PhysicalDisk data returned"
                         'Disk Type'      = "N/A"
+                        'Size (GB)'      = "N/A"
                     }
                     try {
                         $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
@@ -155,7 +151,6 @@ foreach ($macAddress in $macAddresses) {
                     $failureStatus = "Error connecting to $($ipAddress): $errorMsg"
                     $diskType = "N/A"
                 }
-
                 $resultObj = [PSCustomObject]@{
                     'MAC Address'    = $macAddress
                     'IP Address'     = $ipAddress
@@ -163,8 +158,8 @@ foreach ($macAddress in $macAddresses) {
                     'Drive Name'     = "N/A"
                     'Drive Status'   = $failureStatus
                     'Disk Type'      = $diskType
+                    'Size (GB)'      = "N/A"
                 }
-
                 # Append the error result to the CSV file
                 try {
                     $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
@@ -182,6 +177,7 @@ foreach ($macAddress in $macAddresses) {
                 'Drive Name'     = "N/A"
                 'Drive Status'   = "N/A"
                 'Disk Type'      = "N/A"
+                'Size (GB)'      = "N/A"
             }
             # Append the result to the CSV file
             try {
