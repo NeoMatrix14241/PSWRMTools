@@ -13,6 +13,7 @@ $outputFile = "SMART_RESULTS_WRM.csv"   # Path to save the results in CSV format
 $dhcpServer = "192.168.160.100"  # Replace with your DHCP server's IP address
 $scopeId = "192.168.160.0"  # Replace with your ScopeId (usually the network ID of your DHCP scope)
 # =====================================================================================================
+
 # Debug: Output the current working directory
 Write-Host "Current working directory: $(Get-Location)"
 
