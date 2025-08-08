@@ -10,7 +10,7 @@ $macAddressFile = "mac_address.txt"  # Path to your file with MAC addresses
 $outputFile = "SMART_RESULTS_WRM.csv"   # Path to save the results in CSV format
 
 # Set your DHCP server's IP address (e.g., EC2 instance in AWS)
-$dhcpServer = "192.168.160.100"  # Replace with your DHCP server's IP address
+$dhcpServer = "192.168.126.134"  # Replace with your DHCP server's IP address
 $scopeId = "192.168.160.0"  # Replace with your ScopeId (usually the network ID of your DHCP scope)
 # =====================================================================================================
 
@@ -71,8 +71,8 @@ try {
 Write-Host "Found the following leases:"
 $leases | Format-Table ClientId, IPAddress, HostName
 
-# Define CSV column order (updated to include Size)
-$csvColumns = @("MAC Address", "IP Address", "Computer Name", "Drive Name", "Drive Status", "Disk Type", "Size (GB)")
+# Define CSV column order (updated to include Volume information)
+$csvColumns = @("MAC Address", "IP Address", "Computer Name", "Drive Name", "Drive Status", "Disk Type", "Size (GB)", "Volume Letter", "Volume Label", "File System", "Used Space (GB)", "Free Space (GB)", "Total Volume Size (GB)")
 
 # Loop through each MAC address
 foreach ($macAddress in $macAddresses) {
@@ -100,45 +100,136 @@ foreach ($macAddress in $macAddresses) {
             # Get the IP address and hostname for the MAC address
             $ipAddress = $leasesMatching.IPAddress
             $hostName = $leasesMatching.HostName
-            # Always use Get-PhysicalDisk via Invoke-Command for disk health (updated to include Size)
+            # Get both PhysicalDisk and Volume information via Invoke-Command
             try {
                 $targetName = if ($hostName) { $hostName } else { $ipAddress }
-                $diskResults = Invoke-Command -ComputerName $targetName -ScriptBlock {
-                    Get-PhysicalDisk | Select FriendlyName, MediaType, HealthStatus, Size
+                $combinedResults = Invoke-Command -ComputerName $targetName -ScriptBlock {
+                    # Get PhysicalDisk information
+                    $physicalDisks = Get-PhysicalDisk | Select FriendlyName, MediaType, HealthStatus, Size, DeviceId
+                    
+                    # Get Volume information
+                    $volumes = Get-Volume | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter } | 
+                               Select DriveLetter, FileSystemLabel, FileSystem, Size, SizeRemaining
+                    
+                    # Get disk-to-volume mapping
+                    $diskToVolume = @{}
+                    $partitions = Get-Partition | Where-Object { $_.DriveLetter }
+                    foreach ($partition in $partitions) {
+                        $diskNumber = $partition.DiskNumber
+                        $driveLetter = $partition.DriveLetter
+                        if (-not $diskToVolume.ContainsKey($diskNumber)) {
+                            $diskToVolume[$diskNumber] = @()
+                        }
+                        $diskToVolume[$diskNumber] += $driveLetter
+                    }
+                    
+                    # Combine the data
+                    $combinedData = @()
+                    foreach ($disk in $physicalDisks) {
+                        $diskNumber = $disk.DeviceId
+                        $relatedVolumes = $diskToVolume[$diskNumber]
+                        
+                        if ($relatedVolumes) {
+                            foreach ($driveLetter in $relatedVolumes) {
+                                $volume = $volumes | Where-Object { $_.DriveLetter -eq $driveLetter }
+                                if ($volume) {
+                                    $combinedData += [PSCustomObject]@{
+                                        PhysicalDisk = $disk
+                                        Volume = $volume
+                                        DriveLetter = $driveLetter
+                                    }
+                                }
+                            }
+                        } else {
+                            # Physical disk without associated volumes
+                            $combinedData += [PSCustomObject]@{
+                                PhysicalDisk = $disk
+                                Volume = $null
+                                DriveLetter = $null
+                            }
+                        }
+                    }
+                    
+                    # Also add volumes that might not have been matched to physical disks
+                    foreach ($volume in $volumes) {
+                        $found = $false
+                        foreach ($data in $combinedData) {
+                            if ($data.DriveLetter -eq $volume.DriveLetter) {
+                                $found = $true
+                                break
+                            }
+                        }
+                        if (-not $found) {
+                            $combinedData += [PSCustomObject]@{
+                                PhysicalDisk = $null
+                                Volume = $volume
+                                DriveLetter = $volume.DriveLetter
+                            }
+                        }
+                    }
+                    
+                    return $combinedData
                 }
-                if ($diskResults) {
-                    foreach ($disk in $diskResults) {
-                        # Convert size from bytes to GB (rounded to 2 decimal places)
-                        $sizeGB = if ($disk.Size) { [math]::Round($disk.Size / 1GB, 2) } else { "N/A" }
+                
+                if ($combinedResults) {
+                    foreach ($result in $combinedResults) {
+                        # Physical Disk information
+                        $diskName = if ($result.PhysicalDisk) { $result.PhysicalDisk.FriendlyName } else { "N/A" }
+                        $diskStatus = if ($result.PhysicalDisk) { $result.PhysicalDisk.HealthStatus } else { "N/A" }
+                        $diskType = if ($result.PhysicalDisk) { $result.PhysicalDisk.MediaType } else { "N/A" }
+                        $diskSizeGB = if ($result.PhysicalDisk -and $result.PhysicalDisk.Size) { [math]::Round($result.PhysicalDisk.Size / 1GB, 2) } else { "N/A" }
+                        
+                        # Volume information
+                        $volumeLetter = if ($result.Volume) { $result.Volume.DriveLetter + ":" } else { "N/A" }
+                        $volumeLabel = if ($result.Volume) { $result.Volume.FileSystemLabel } else { "N/A" }
+                        $fileSystem = if ($result.Volume) { $result.Volume.FileSystem } else { "N/A" }
+                        $totalVolumeSize = if ($result.Volume -and $result.Volume.Size) { [math]::Round($result.Volume.Size / 1GB, 2) } else { "N/A" }
+                        $freeSpace = if ($result.Volume -and $result.Volume.SizeRemaining) { [math]::Round($result.Volume.SizeRemaining / 1GB, 2) } else { "N/A" }
+                        $usedSpace = if ($result.Volume -and $result.Volume.Size -and $result.Volume.SizeRemaining) { 
+                            [math]::Round(($result.Volume.Size - $result.Volume.SizeRemaining) / 1GB, 2) 
+                        } else { "N/A" }
+                        
                         $resultObj = [PSCustomObject]@{
-                            'MAC Address'    = $macAddress
-                            'IP Address'     = $ipAddress
-                            'Computer Name'  = $targetName
-                            'Drive Name'     = $disk.FriendlyName
-                            'Drive Status'   = $disk.HealthStatus
-                            'Disk Type'      = $disk.MediaType
-                            'Size (GB)'      = $sizeGB
+                            'MAC Address'           = $macAddress
+                            'IP Address'           = $ipAddress
+                            'Computer Name'        = $targetName
+                            'Drive Name'           = $diskName
+                            'Drive Status'         = $diskStatus
+                            'Disk Type'            = $diskType
+                            'Size (GB)'            = $diskSizeGB
+                            'Volume Letter'        = $volumeLetter
+                            'Volume Label'         = $volumeLabel
+                            'File System'          = $fileSystem
+                            'Used Space (GB)'      = $usedSpace
+                            'Free Space (GB)'      = $freeSpace
+                            'Total Volume Size (GB)' = $totalVolumeSize
                         }
                         try {
                             $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
-                            Write-Host "PhysicalDisk health for MAC $macAddress added to CSV."
+                            Write-Host "Disk and Volume info for MAC $macAddress (Drive: $volumeLetter) added to CSV."
                         } catch {
                             Write-Host "Error appending to CSV: $_"
                         }
                     }
                 } else {
                     $resultObj = [PSCustomObject]@{
-                        'MAC Address'    = $macAddress
-                        'IP Address'     = $ipAddress
-                        'Computer Name'  = $targetName
-                        'Drive Name'     = "N/A"
-                        'Drive Status'   = "No PhysicalDisk data returned"
-                        'Disk Type'      = "N/A"
-                        'Size (GB)'      = "N/A"
+                        'MAC Address'           = $macAddress
+                        'IP Address'           = $ipAddress
+                        'Computer Name'        = $targetName
+                        'Drive Name'           = "N/A"
+                        'Drive Status'         = "No disk/volume data returned"
+                        'Disk Type'            = "N/A"
+                        'Size (GB)'            = "N/A"
+                        'Volume Letter'        = "N/A"
+                        'Volume Label'         = "N/A"
+                        'File System'          = "N/A"
+                        'Used Space (GB)'      = "N/A"
+                        'Free Space (GB)'      = "N/A"
+                        'Total Volume Size (GB)' = "N/A"
                     }
                     try {
                         $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
-                        Write-Host "No PhysicalDisk data for MAC $macAddress, added to CSV."
+                        Write-Host "No disk/volume data for MAC $macAddress, added to CSV."
                     } catch {
                         Write-Host "Error appending to CSV: $_"
                     }
@@ -147,24 +238,28 @@ foreach ($macAddress in $macAddresses) {
                 $errorMsg = $_.ToString()
                 if ($errorMsg -match "The RPC server is unavailable") {
                     $failureStatus = "RPC server unavailable for IP: $ipAddress"
-                    $diskType = "N/A"
                 } else {
                     $failureStatus = "Error connecting to $($ipAddress): $errorMsg"
-                    $diskType = "N/A"
                 }
                 $resultObj = [PSCustomObject]@{
-                    'MAC Address'    = $macAddress
-                    'IP Address'     = $ipAddress
-                    'Computer Name'  = $ipAddress
-                    'Drive Name'     = "N/A"
-                    'Drive Status'   = $failureStatus
-                    'Disk Type'      = $diskType
-                    'Size (GB)'      = "N/A"
+                    'MAC Address'           = $macAddress
+                    'IP Address'           = $ipAddress
+                    'Computer Name'        = $ipAddress
+                    'Drive Name'           = "N/A"
+                    'Drive Status'         = $failureStatus
+                    'Disk Type'            = "N/A"
+                    'Size (GB)'            = "N/A"
+                    'Volume Letter'        = "N/A"
+                    'Volume Label'         = "N/A"
+                    'File System'          = "N/A"
+                    'Used Space (GB)'      = "N/A"
+                    'Free Space (GB)'      = "N/A"
+                    'Total Volume Size (GB)' = "N/A"
                 }
                 # Append the error result to the CSV file
                 try {
                     $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force -Append
-                    Write-Host "PhysicalDisk error for MAC $macAddress added to CSV."
+                    Write-Host "Disk/Volume error for MAC $macAddress added to CSV."
                 } catch {
                     Write-Host "Error appending to CSV: $_"
                 }
@@ -172,13 +267,19 @@ foreach ($macAddress in $macAddresses) {
         } else {
             # If no lease is found for the MAC address, log that as well
             $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $macAddress
-                'IP Address'     = "No IP address found"
-                'Computer Name'  = "N/A"
-                'Drive Name'     = "N/A"
-                'Drive Status'   = "N/A"
-                'Disk Type'      = "N/A"
-                'Size (GB)'      = "N/A"
+                'MAC Address'           = $macAddress
+                'IP Address'           = "No IP address found"
+                'Computer Name'        = "N/A"
+                'Drive Name'           = "N/A"
+                'Drive Status'         = "N/A"
+                'Disk Type'            = "N/A"
+                'Size (GB)'            = "N/A"
+                'Volume Letter'        = "N/A"
+                'Volume Label'         = "N/A"
+                'File System'          = "N/A"
+                'Used Space (GB)'      = "N/A"
+                'Free Space (GB)'      = "N/A"
+                'Total Volume Size (GB)' = "N/A"
             }
             # Append the result to the CSV file
             try {
