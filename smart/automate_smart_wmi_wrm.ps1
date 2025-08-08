@@ -1,4 +1,6 @@
-﻿# Ensure the script runs in its own directory (robust for elevation and special characters)
+﻿# DEPRECATED: This script is no longer maintained. Please use the WRM version instead.
+
+# Ensure the script runs in its own directory (robust for elevation and special characters)
 $scriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
 Set-Location -LiteralPath "$scriptDir"
 
