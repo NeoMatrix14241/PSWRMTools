@@ -10,7 +10,7 @@ $logFolder = Join-Path $scriptDir $logFolderName
 $dhcpServer = "192.168.126.134"
 $scopeId = "192.168.160.0"
 $checkPrimaryOnly = $true # Set to $true to check only primary drive (C:)
-$maxConcurrentJobs = 5  # Adjust based on your network and system capacity
+$maxConcurrentJobs = 150  # Adjust based on your network and system capacity
 $ChkdskOnNextRestart = $true  # Set to $true to schedule CHKDSK on next restart (sends Y), $false for immediate check (sends N)
 $ChkdskRestartPC = $true      # Set to $true to automatically restart PC after scheduling CHKDSK (only if ChkdskOnNextRestart = $true)
 
