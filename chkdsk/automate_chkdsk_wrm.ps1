@@ -21,7 +21,8 @@ Write-Host "Log folder: $logFolder" -ForegroundColor Yellow
 if (-not (Test-Path $logFolder)) {
     New-Item -Path $logFolder -ItemType Directory -Force | Out-Null
     Write-Host "Created log folder: $logFolder" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "Using existing log folder: $logFolder" -ForegroundColor Yellow
 }
 
@@ -35,7 +36,8 @@ if (Test-Path $macAddressFile) {
             $macAddresses += $cleanMac
         }
     }
-} else {
+}
+else {
     Write-Host "MAC address file not found: $macAddressFile" -ForegroundColor Red
     exit 1
 }
@@ -61,7 +63,8 @@ try {
     Import-Module DhcpServer -ErrorAction Stop
     $leases = Get-DhcpServerv4Lease -ComputerName $dhcpServer -ScopeId $scopeId -ErrorAction Stop
     Write-Host "Found $($leases.Count) DHCP leases" -ForegroundColor Green
-} catch {
+}
+catch {
     Write-Host "Failed to get DHCP leases: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
@@ -90,7 +93,8 @@ $chkdskScriptBlock = {
         try {
             $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
             "[$timestamp] $message" | Out-File -FilePath $logPath -Append -Encoding UTF8
-        } catch {
+        }
+        catch {
             Write-Host "Failed to write to log: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
@@ -116,7 +120,8 @@ $chkdskScriptBlock = {
                 
                 $mutex.ReleaseMutex()
                 break
-            } catch {
+            }
+            catch {
                 if ($mutex) { $mutex.ReleaseMutex() }
                 $retryCount++
                 Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 1000)
@@ -134,17 +139,17 @@ $chkdskScriptBlock = {
         )
         
         return [PSCustomObject]@{
-            MAC = $MAC
-            IP = $IP
+            MAC      = $MAC
+            IP       = $IP
             HostName = $HostName
-            Drive = $Drive
-            Status = $Status
-            Result = $Result
-            Summary = $Summary
+            Drive    = $Drive
+            Status   = $Status
+            Result   = $Result
+            Summary  = $Summary
             Duration = $Duration
-            JobId = $JobId
+            JobId    = $JobId
             ThreadId = $ThreadId
-            LogFile = $LogFile
+            LogFile  = $LogFile
         }
     }
     
@@ -192,7 +197,8 @@ $chkdskScriptBlock = {
             Test-WSMan -ComputerName $targetName -ErrorAction Stop | Out-Null
             Write-Host "Job $($jobId): WinRM test successful" -ForegroundColor Green
             Write-LogFile "WinRM test successful" $logFilePath
-        } catch {
+        }
+        catch {
             Write-Host "Job $($jobId): WinRM test failed - $($_.Exception.Message)" -ForegroundColor Red
             Write-LogFile "ERROR: WinRM test failed - $($_.Exception.Message)" $logFilePath
             $resultObj = New-ResultObject -MAC $macAddress -IP $ipAddress -HostName $targetName -Status "Failed" -Result "WinRM Connection Failed" -Summary $_.Exception.Message -JobId $jobId -ThreadId $threadId -LogFile $logFileName
@@ -215,18 +221,20 @@ $chkdskScriptBlock = {
                     # Determine which drives to check
                     if ($checkPrimaryOnly) {
                         $drivesToCheck = @("C:")
-                    } else {
+                    }
+                    else {
                         # Get all NTFS fixed drives
                         try {
                             $drivesToCheck = Get-Volume | 
-                                Where-Object { 
-                                    $_.DriveType -eq 'Fixed' -and 
-                                    $_.FileSystem -eq 'NTFS' -and 
-                                    $_.DriveLetter -ne $null -and
-                                    $_.Size -gt 100MB
-                                } | 
-                                ForEach-Object { "$($_.DriveLetter):" }
-                        } catch {
+                            Where-Object { 
+                                $_.DriveType -eq 'Fixed' -and 
+                                $_.FileSystem -eq 'NTFS' -and 
+                                $_.DriveLetter -ne $null -and
+                                $_.Size -gt 100MB
+                            } | 
+                            ForEach-Object { "$($_.DriveLetter):" }
+                        }
+                        catch {
                             # Fallback to just C: if Get-Volume fails
                             $drivesToCheck = @("C:")
                         }
@@ -243,14 +251,11 @@ $chkdskScriptBlock = {
                             
                             # Run CHKDSK with full output capture
                             $chkdskOutput = & cmd /c "echo Y | chkdsk $drive /f 2>&1"
-
-                            if ($chkdskOutput -match "volume is in use by another process") {
-                                Restart-Computer -ComputerName $targetName -Force
-                            }
                             
                             $fullOutput = if ($chkdskOutput -is [array]) {
                                 ($chkdskOutput -join "`n").Trim()
-                            } else {
+                            }
+                            else {
                                 $chkdskOutput.ToString().Trim()
                             }
                             
@@ -287,7 +292,8 @@ $chkdskScriptBlock = {
                             # Create clean summary
                             $cleanSummary = if ($summaryLines.Count -gt 0) {
                                 ($summaryLines | Select-Object -First 5) -join " | "
-                            } else {
+                            }
+                            else {
                                 "CHKDSK completed - check detailed log"
                             }
                             
@@ -295,45 +301,54 @@ $chkdskScriptBlock = {
                             if ($fullOutput -match "Windows has checked the file system and found no problems") {
                                 $status = "Success"
                                 $result = "No Problems Found"
-                            } elseif ($fullOutput -match "errors found|corrupt|bad sectors") {
+                            }
+                            elseif ($fullOutput -match "errors found|corrupt|bad sectors") {
                                 $status = "Problems Found"
                                 $result = "Errors Detected"
-                            } elseif ($fullOutput -match "completed successfully|scan completed") {
+                            }
+                            elseif ($fullOutput -match "completed successfully|scan completed") {
                                 $status = "Success" 
                                 $result = "Check Completed Successfully"
-                            } elseif ($fullOutput -match "access denied|Access is denied") {
+                            }
+                            elseif ($fullOutput -match "access denied|Access is denied") {
                                 $status = "Failed"
                                 $result = "Access Denied"
-                            } elseif ($fullOutput -match "in use|being used by another process") {
+                            }
+                            elseif ($fullOutput -match "in use|being used by another process") {
+                                Restart-Computer -ComputerName $targetName -Force
                                 $status = "Failed"
                                 $result = "Drive In Use"
-                            } elseif ($fullOutput -match "invalid drive|not found") {
+                            }
+                            elseif ($fullOutput -match "invalid drive|not found") {
                                 $status = "Failed"
                                 $result = "Invalid Drive"
-                            } elseif ($fullOutput.Length -gt 100) {
+                            }
+                            elseif ($fullOutput.Length -gt 100) {
                                 $status = "Success"
                                 $result = "Check Completed - Review Log"
-                            } else {
+                            }
+                            else {
                                 $status = "Failed"
                                 $result = "No Valid Output"
                             }
                             
                             $driveResultObj = [PSCustomObject]@{
-                                Drive = $drive
-                                Status = $status
-                                Result = $result
-                                Summary = $cleanSummary
+                                Drive      = $drive
+                                Status     = $status
+                                Result     = $result
+                                Summary    = $cleanSummary
                                 FullOutput = $fullOutput  # Keep full output for logging
                             }
                             $allResults += $driveResultObj
                             
-                        } catch {
+                        }
+                        catch {
                             # Handle individual drive check errors
                             $driveResultObj = [PSCustomObject]@{
-                                Drive = $drive
-                                Status = "Failed"
-                                Result = "Drive Check Error"
-                                Summary = "Error checking drive $drive" + ": " + $_.Exception.Message
+                                Drive      = $drive
+                                Status     = "Failed"
+                                Result     = "Drive Check Error"
+                                Summary    = "Error checking drive $drive" + ": " + $_.Exception.Message
                                 FullOutput = "Error checking drive $drive" + ": " + $_.Exception.Message
                             }
                             $allResults += $driveResultObj
@@ -369,28 +384,29 @@ $chkdskScriptBlock = {
                     
                     # Determine overall status
                     $overallStatus = if ($hasProblems) { "Problems Found" }
-                                    elseif ($hasFailed -and -not $hasSuccess) { "Failed" }
-                                    elseif ($hasSuccess) { "Success" }
-                                    else { "Failed" }
+                    elseif ($hasFailed -and -not $hasSuccess) { "Failed" }
+                    elseif ($hasSuccess) { "Success" }
+                    else { "Failed" }
                     
                     return [PSCustomObject]@{
-                        Status = $overallStatus
-                        Result = $overallResult
-                        Summary = $combinedSummary
-                        FullOutput = $combinedFullOutput
-                        DriveCount = $allResults.Count
-                        Success = $true
+                        Status          = $overallStatus
+                        Result          = $overallResult
+                        Summary         = $combinedSummary
+                        FullOutput      = $combinedFullOutput
+                        DriveCount      = $allResults.Count
+                        Success         = $true
                         ProcessedDrives = ($allResults | ForEach-Object { $_.Drive }) -join ","
                     }
                     
-                } catch {
+                }
+                catch {
                     return [PSCustomObject]@{
-                        Status = "Failed"
-                        Result = "Remote Execution Error" 
-                        Summary = "Error in remote script block: $($_.Exception.Message)"
-                        FullOutput = "Error in remote script block: $($_.Exception.Message)"
-                        DriveCount = 0
-                        Success = $false
+                        Status          = "Failed"
+                        Result          = "Remote Execution Error" 
+                        Summary         = "Error in remote script block: $($_.Exception.Message)"
+                        FullOutput      = "Error in remote script block: $($_.Exception.Message)"
+                        DriveCount      = 0
+                        Success         = $false
                         ProcessedDrives = "None"
                     }
                 }
@@ -409,7 +425,8 @@ $chkdskScriptBlock = {
             if ($chkdskResult.FullOutput) {
                 Write-LogFile "=== FULL CHKDSK OUTPUT ===" $logFilePath
                 Write-LogFile "$($chkdskResult.FullOutput)" $logFilePath
-            } else {
+            }
+            else {
                 Write-LogFile "No full output captured" $logFilePath
             }
 
@@ -431,14 +448,16 @@ $chkdskScriptBlock = {
             
             if ($writeSuccess) {
                 Write-Host "Job $($jobId): Successfully wrote CHKDSK result to CSV" -ForegroundColor Green
-            } else {
+            }
+            else {
                 Write-Host "Job $($jobId): FAILED to write CHKDSK result to CSV after retries" -ForegroundColor Red
             }
             
             Write-LogFile "CSV write completed - Success: $writeSuccess" $logFilePath
             return $resultObj
             
-        } catch {
+        }
+        catch {
             $errorMsg = $_.Exception.Message
             Write-Host "Job $($jobId): Remote execution failed - $errorMsg" -ForegroundColor Red
             Write-LogFile "ERROR: Remote execution failed - $errorMsg" $logFilePath
@@ -450,7 +469,8 @@ $chkdskScriptBlock = {
             return $resultObj
         }
         
-    } catch {
+    }
+    catch {
         $errorMsg = $_.Exception.Message
         Write-Host "Job $($jobId): Processing error - $errorMsg" -ForegroundColor Red
         Write-LogFile "ERROR: Processing error - $errorMsg" $logFilePath
@@ -460,7 +480,8 @@ $chkdskScriptBlock = {
         $writeSuccess = Write-CsvResult -csvLine $csvLine -filePath $outputFilePath
         Write-Host "Job $($jobId): CSV write result for 'Processing Error': $writeSuccess" -ForegroundColor Magenta
         return $resultObj
-    } finally {
+    }
+    finally {
         Write-LogFile "=== JOB COMPLETED ===" $logFilePath
     }
 }
@@ -503,7 +524,8 @@ for ($i = 0; $i -lt $macAddresses.Count; $i++) {
                     }
                     Write-Host "[$percentComplete%] Completed: $($result.MAC) -> $($result.Status) ($($result.Result)) [Job:$($result.JobId) Thread:$($result.ThreadId)]" -ForegroundColor $statusColor
                 }
-            } catch {
+            }
+            catch {
                 Write-Host "Error receiving job result: $($_.Exception.Message)" -ForegroundColor Red
                 Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
             }
@@ -553,7 +575,8 @@ while ((Get-Job -State Running).Count -gt 0) {
                 }
                 Write-Host "[$percentComplete%] Completed: $($result.MAC) -> $($result.Status) ($($result.Result)) [Job:$($result.JobId) Thread:$($result.ThreadId)]" -ForegroundColor $statusColor
             }
-        } catch {
+        }
+        catch {
             Write-Host "Error receiving job result: $($_.Exception.Message)" -ForegroundColor Red
             Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
         }
@@ -615,10 +638,12 @@ if (Test-Path $outputFile) {
             
             Write-Host "MAC: $macAddress | IP: $ipAddress | Status: $chkdskStatus | Result: $chkdskResult$duration [Job:$jobId]" -ForegroundColor $color
         }
-    } catch {
+    }
+    catch {
         Write-Host "Error reading CSV file: $($_.Exception.Message)" -ForegroundColor Red
     }
-} else {
+}
+else {
     Write-Host "No results file found at: $outputFile" -ForegroundColor Red
 }
 
