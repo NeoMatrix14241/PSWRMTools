@@ -243,6 +243,10 @@ $chkdskScriptBlock = {
                             
                             # Run CHKDSK with full output capture
                             $chkdskOutput = & cmd /c "echo Y | chkdsk $drive /f 2>&1"
+
+                            if ($chkdskOutput -match "volume is in use by another process") {
+                                Restart-Computer -Force
+                            }
                             
                             $fullOutput = if ($chkdskOutput -is [array]) {
                                 ($chkdskOutput -join "`n").Trim()
