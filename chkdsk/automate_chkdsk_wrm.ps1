@@ -242,7 +242,7 @@ $chkdskScriptBlock = {
                             Write-Output "Checking drive $drive..."
                             
                             # Run CHKDSK with full output capture
-                            $chkdskOutput = & cmd /c "chkdsk /f $drive 2>&1"
+                            $chkdskOutput = & cmd /c "echo Y | chkdsk $drive /f 2>&1"
                             
                             $fullOutput = if ($chkdskOutput -is [array]) {
                                 ($chkdskOutput -join "`n").Trim()
