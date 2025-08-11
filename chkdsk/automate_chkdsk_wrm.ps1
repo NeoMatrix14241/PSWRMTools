@@ -245,7 +245,7 @@ $chkdskScriptBlock = {
                             $chkdskOutput = & cmd /c "echo Y | chkdsk $drive /f 2>&1"
 
                             if ($chkdskOutput -match "volume is in use by another process") {
-                                Restart-Computer -Force
+                                Restart-Computer -ComputerName $targetName -Force
                             }
                             
                             $fullOutput = if ($chkdskOutput -is [array]) {
