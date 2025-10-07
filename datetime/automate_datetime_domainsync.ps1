@@ -3,7 +3,7 @@
 # =====================================================================================================
 $pcListFile = "hostnames.txt"
 $outputFile = "TIME_SYNC_RESULTS.csv"
-$timeServer = "SVI-ADC-01.sviisca.com"
+$timeServer = "SAMPLE-DOMAIN.MYDOMAIN.COM"
 # =====================================================================================================
 
 # Set script directory
