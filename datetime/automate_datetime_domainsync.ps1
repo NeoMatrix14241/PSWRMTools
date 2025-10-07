@@ -3,7 +3,7 @@
 # =====================================================================================================
 $pcListFile = "hostnames.txt"
 $outputFile = "TIME_SYNC_RESULTS.csv"
-$timeServer = "DOMAIN-SERVER-SAMPLE.domain.com"
+$timeServer = "SVI-ADC-01.sviisca.com"
 # =====================================================================================================
 
 # Set script directory
@@ -23,9 +23,6 @@ $pcList = Get-Content -Path $pcListFile | ForEach-Object { $_.Trim() } | Where-O
 if (Test-Path -Path $outputFile) {
     Remove-Item -Path $outputFile
 }
-
-# Initialize results array
-$allResults = @()
 
 # Define CSV columns
 $csvColumns = @("Computer Name", "IP Address", "Status", "Time Before", "Time After", "Output", "Error")
@@ -125,14 +122,11 @@ foreach ($pc in $pcList) {
         Write-Host "  [ERROR] Failed: $errorMsg" -ForegroundColor Red
     }
     
-    # Add to results array
-    $allResults += $resultObj
+    # Export to CSV immediately (append)
+    $resultObj | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Append
     
     Write-Host ""
 }
-
-# Export all results to CSV at once
-$allResults | Select-Object $csvColumns | Export-Csv -Path $outputFile -NoTypeInformation -Force
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "SCRIPT COMPLETED" -ForegroundColor Cyan
@@ -140,12 +134,22 @@ Write-Host "Results saved to: $outputFile" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Display summary using the results array (not re-reading CSV)
-$successCount = ($allResults | Where-Object { $_.Status -eq "Success" }).Count
-$failedCount = ($allResults | Where-Object { $_.Status -eq "Failed" }).Count
-
-Write-Host "SUMMARY:" -ForegroundColor Yellow
-Write-Host "  Total PCs: $($allResults.Count)" -ForegroundColor White
-Write-Host "  Success: $successCount" -ForegroundColor Green
-Write-Host "  Failed: $failedCount" -ForegroundColor Red
-Write-Host ""
+# Display summary by reading the CSV
+if (Test-Path -Path $outputFile) {
+    try {
+        $results = Import-Csv -Path $outputFile -ErrorAction Stop
+        $successCount = ($results | Where-Object { $_.Status -eq "Success" }).Count
+        $failedCount = ($results | Where-Object { $_.Status -eq "Failed" }).Count
+        
+        Write-Host "SUMMARY:" -ForegroundColor Yellow
+        Write-Host "  Total PCs: $($results.Count)" -ForegroundColor White
+        Write-Host "  Success: $successCount" -ForegroundColor Green
+        Write-Host "  Failed: $failedCount" -ForegroundColor Red
+        Write-Host ""
+    } catch {
+        Write-Host "ERROR: Could not read CSV for summary: $_" -ForegroundColor Red
+        Write-Host "Please check the file manually: $outputFile" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "ERROR: Output file not found!" -ForegroundColor Red
+}
