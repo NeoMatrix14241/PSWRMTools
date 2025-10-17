@@ -1,0 +1,3 @@
+# Format: <IPv4 Address>, username, password
+# Reason is this is not part of the domain so we fuck off and add additional setup for workgroup member
+ipv4 address, username, password

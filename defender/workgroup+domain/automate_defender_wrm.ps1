@@ -8,10 +8,8 @@ function Get-HostNetworkInfo {
     )
     try {
         if (-not $IsWorkgroup) {
-            # Try domain method first
             $networkInfo = Get-CimInstance -ComputerName $ComputerName -ClassName Win32_NetworkAdapterConfiguration | Where-Object { $_.IPEnabled -eq $true }
         } else {
-            # Use explicit credentials for workgroup hosts
             $securePassword = ConvertTo-SecureString $Password -AsPlainText -Force
             $cred = New-Object System.Management.Automation.PSCredential ($Username, $securePassword)
             $cimSession = New-CimSession -ComputerName $ComputerName -Credential $cred -Authentication Default
@@ -42,19 +40,21 @@ function Get-HostNetworkInfo {
         return @{ IPv4 = $null; MAC = $null }
     }
 }
-# Ensure the script runs in its own directory (robust for elevation and special characters)
+
+# Ensure the script runs in its own directory
 $scriptDir = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
 Set-Location -LiteralPath "$scriptDir"
 
-
-
+# =====================================================================================================
+# MODIFY THIS SECTION TO SET YOUR FILE PATHS
+# =====================================================================================================
 # File Paths
 $domainHostFile = "hostname_domain.txt"
 $workgroupHostFile = "hostname_workgroup.txt"
 $outputFile = Join-Path $scriptDir "DEFENDER_RESULTS_WRM.csv"
+# =====================================================================================================
 
 Write-Host "Current working directory: $(Get-Location)"
-
 
 # Check if hostname files exist
 try {
@@ -71,9 +71,7 @@ try {
     exit
 }
 
-
-
-# Read and validate domain hostnames (should be hostnames, not IPs)
+# Read and validate hostnames
 try {
     $rawDomainHostNames = Get-Content -Path $domainHostFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
     $domainHostNames = @()
@@ -84,7 +82,7 @@ try {
             Write-Host "Warning: Skipping IP address '$entry' in domain host file. Use hostnames only."
         }
     }
-    # Read and validate workgroup hosts (supporting comments and per-host credentials)
+    
     if (Test-Path -Path $workgroupHostFile) {
         $rawWorkgroupHostLines = Get-Content -Path $workgroupHostFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and -not ($_.StartsWith('#')) }
         $workgroupHosts = @()
@@ -96,14 +94,9 @@ try {
                 $pass = $parts[2].Trim()
                 if ($ip -match '^(\d{1,3}\.){3}\d{1,3}$') {
                     $workgroupHosts += [PSCustomObject]@{ IP = $ip; Username = $uname; Password = $pass }
-                } else {
-                    Write-Host "Warning: Skipping non-IP entry '$ip' in workgroup host file. Use IPv4 addresses only."
                 }
             } elseif ($parts.Count -eq 1 -and $parts[0] -match '^(\d{1,3}\.){3}\d{1,3}$') {
-                # Allow IP-only lines for backward compatibility (use default creds if set)
                 $workgroupHosts += [PSCustomObject]@{ IP = $parts[0].Trim(); Username = $null; Password = $null }
-            } else {
-                Write-Host "Warning: Skipping invalid line in workgroup host file: '$entry'"
             }
         }
     } else {
@@ -116,11 +109,8 @@ try {
     exit
 }
 
-
-
-# Always delete the previous CSV file before creating a new one at the start of the script
+# Always delete the previous CSV file before creating a new one
 try {
-    # Remove the file only if it exists
     if (Test-Path -LiteralPath $outputFile) {
         Remove-Item -LiteralPath $outputFile -Force
         Write-Host "Deleted previous CSV: $outputFile"
@@ -140,7 +130,6 @@ try {
         Set-Content -Path $outputFile -Value $headerLine -ErrorAction Stop
     } catch {
         Write-Host "Output file $outputFile already deleted, no further actions needed :)"
-        # Do not exit, continue script
     }
     Write-Host "Created new CSV: $outputFile"
 } catch {
@@ -151,24 +140,6 @@ try {
 
 Write-Host "Output file path: $outputFile"
 
-
-
-Write-Host "Found the following domain hostnames:"
-$domainHostNames | ForEach-Object { Write-Host $_ }
-Write-Host "Found the following workgroup hosts (IP, Username, Password):"
-if ($workgroupHosts) {
-    foreach ($workgroupHost in $workgroupHosts) {
-        $pwDisplay = ''
-        if ($workgroupHost.Password) {
-            $pwDisplay = '***'
-        }
-        Write-Host ("IP: {0}, Username: {1}, Password: {2}" -f $workgroupHost.IP, $workgroupHost.Username, $pwDisplay)
-    }
-} else {
-    Write-Host "(none)"
-}
-
-
 # Define CSV column order (full set)
 $csvColumns = @(
     "MAC Address", "IP Address", "Computer Name", "Domain User", "Threat Name", "Action Success",
@@ -176,63 +147,87 @@ $csvColumns = @(
     "Threat ID", "Threat Status Error Code", "Threat Status ID", "Status"
 )
 
-
-
-
-# Optionally, set default credentials for workgroup hosts that do not specify them in the file
-$defaultWorkgroupUsername = $null  # e.g. "administrator"
-$defaultWorkgroupPassword = $null  # e.g. "password"
-
+# Optionally, set default credentials for workgroup hosts
+$defaultWorkgroupUsername = $null
+$defaultWorkgroupPassword = $null
 
 # Loop through each domain hostname
 foreach ($hostName in $domainHostNames) {
     Write-Host ""
-    Write-Host "Processing Domain Hostname: $hostName"
-    $netInfo = Get-HostNetworkInfo -ComputerName $hostName -IsWorkgroup:$false
-    $ipv4 = if ($netInfo.IPv4) { [string]$netInfo.IPv4 } else { "N/A" }
-    $mac = if ($netInfo.MAC) { $netInfo.MAC } else { "N/A" }
     try {
-        $defenderResults = Invoke-Command -ComputerName $hostName -ScriptBlock {
-            try {
-                $detections = Get-MpThreatDetection
-                if ($detections) {
-                    return $detections | ForEach-Object {
-                        [PSCustomObject]@{
-                            ThreatName = if ($_.Resources) { ($_.Resources -join ", ") } elseif ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
-                            ActionSuccess = if ($_.ActionSuccess) { $_.ActionSuccess.ToString() } else { "" }
-                            InitialDetectionTime = if ($_.InitialDetectionTime) { $_.InitialDetectionTime.ToString() } else { "" }
-                            LastThreatStatusChangeTime = if ($_.LastThreatStatusChangeTime) { $_.LastThreatStatusChangeTime.ToString() } else { "" }
-                            ProcessName = if ($_.ProcessName) { $_.ProcessName.ToString() } else { "" }
-                            RemediationTime = if ($_.RemediationTime) { $_.RemediationTime.ToString() } else { "" }
-                            ThreatID = if ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
-                            ThreatStatusErrorCode = if ($_.ThreatStatusErrorCode -ne $null) { $_.ThreatStatusErrorCode.ToString() } elseif ($_.PSObject.Properties.Match('ThreatStatusErrorCode')) { $_.PSObject.Properties['ThreatStatusErrorCode'].Value } else { "" }
-                            ThreatStatusID = if ($_.ThreatStatusID) { $_.ThreatStatusID.ToString() } else { "" }
-                            DomainUser = if ($_.DomainUser) { $_.DomainUser } else { "" }
+        Write-Host "Processing Domain Hostname: $hostName"
+        
+        $netInfo = Get-HostNetworkInfo -ComputerName $hostName -IsWorkgroup:$false
+        $ipAddress = if ($netInfo.IPv4) { $netInfo.IPv4 } else { "N/A" }
+        $macAddress = if ($netInfo.MAC) { $netInfo.MAC } else { "N/A" }
+        
+        try {
+            $defenderResults = Invoke-Command -ComputerName $hostName -ScriptBlock {
+                try {
+                    $detections = Get-MpThreatDetection
+                    if ($detections) {
+                        return $detections | ForEach-Object {
+                            [PSCustomObject]@{
+                                ThreatName = if ($_.Resources) { ($_.Resources -join ", ") } elseif ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
+                                ActionSuccess = if ($_.ActionSuccess) { $_.ActionSuccess.ToString() } else { "" }
+                                InitialDetectionTime = if ($_.InitialDetectionTime) { $_.InitialDetectionTime.ToString() } else { "" }
+                                LastThreatStatusChangeTime = if ($_.LastThreatStatusChangeTime) { $_.LastThreatStatusChangeTime.ToString() } else { "" }
+                                ProcessName = if ($_.ProcessName) { $_.ProcessName.ToString() } else { "" }
+                                RemediationTime = if ($_.RemediationTime) { $_.RemediationTime.ToString() } else { "" }
+                                ThreatID = if ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
+                                ThreatStatusErrorCode = if ($_.ThreatStatusErrorCode -ne $null) { $_.ThreatStatusErrorCode.ToString() } elseif ($_.PSObject.Properties.Match('ThreatStatusErrorCode')) { $_.PSObject.Properties['ThreatStatusErrorCode'].Value } else { "" }
+                                ThreatStatusID = if ($_.ThreatStatusID) { $_.ThreatStatusID.ToString() } else { "" }
+                                DomainUser = if ($_.DomainUser) { $_.DomainUser } else { "" }
+                            }
                         }
+                    } else {
+                        return "No threats detected."
                     }
-                } else {
-                    return "No threats detected."
+                } catch {
+                    return "Windows Defender not accessible."
                 }
-            } catch {
-                return "Windows Defender not accessible."
-            }
-        } -ErrorAction Stop
-        if ($defenderResults -is [System.Array]) {
-            foreach ($det in $defenderResults) {
+            } -ErrorAction Stop
+            
+            if ($defenderResults -is [System.Array]) {
+                foreach ($det in $defenderResults) {
+                    $resultObj = [PSCustomObject]@{
+                        'MAC Address'    = $macAddress
+                        'IP Address'     = $ipAddress
+                        'Computer Name'  = $hostName
+                        'Domain User'    = if ($det.PSObject.Properties.Match('DomainUser')) { $det.DomainUser } else { '' }
+                        'Threat Name'    = if ($det.PSObject.Properties.Match('ThreatName')) { $det.ThreatName } else { '' }
+                        'Action Success' = if ($det.PSObject.Properties.Match('ActionSuccess')) { $det.ActionSuccess } else { '' }
+                        'Initial Detection Time' = if ($det.PSObject.Properties.Match('InitialDetectionTime')) { $det.InitialDetectionTime } else { '' }
+                        'Last Threat Status Change Time' = if ($det.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $det.LastThreatStatusChangeTime } else { '' }
+                        'Process Name' = if ($det.PSObject.Properties.Match('ProcessName')) { $det.ProcessName } else { '' }
+                        'Remediation Time' = if ($det.PSObject.Properties.Match('RemediationTime')) { $det.RemediationTime } else { '' }
+                        'Threat ID' = if ($det.PSObject.Properties.Match('ThreatID')) { $det.ThreatID } else { '' }
+                        'Threat Status Error Code' = if ($det.PSObject.Properties.Match('ThreatStatusErrorCode')) { $det.ThreatStatusErrorCode } else { '' }
+                        'Threat Status ID' = if ($det.PSObject.Properties.Match('ThreatStatusID')) { $det.ThreatStatusID } else { '' }
+                        'Status'         = 'Detected'
+                    }
+                    try {
+                        $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                        Write-Host "Defender detection for $hostName added to CSV."
+                    } catch {
+                        Write-Host "Error appending to CSV: $_"
+                    }
+                }
+            } elseif ($defenderResults -is [PSCustomObject]) {
                 $resultObj = [PSCustomObject]@{
-                    'MAC Address'    = $mac
-                    'IP Address'     = $ipv4
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
                     'Computer Name'  = $hostName
-                    'Domain User'    = if ($det.PSObject.Properties.Match('DomainUser')) { $det.DomainUser } elseif ($_.DomainUser) { $_.DomainUser } else { '' }
-                    'Threat Name'    = if ($det.PSObject.Properties.Match('ThreatName')) { $det.ThreatName } else { '' }
-                    'Action Success' = if ($det.PSObject.Properties.Match('ActionSuccess')) { $det.ActionSuccess } else { '' }
-                    'Initial Detection Time' = if ($det.PSObject.Properties.Match('InitialDetectionTime')) { $det.InitialDetectionTime } else { '' }
-                    'Last Threat Status Change Time' = if ($det.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $det.LastThreatStatusChangeTime } else { '' }
-                    'Process Name' = if ($det.PSObject.Properties.Match('ProcessName')) { $det.ProcessName } else { '' }
-                    'Remediation Time' = if ($det.PSObject.Properties.Match('RemediationTime')) { $det.RemediationTime } else { '' }
-                    'Threat ID' = if ($det.PSObject.Properties.Match('ThreatID')) { $det.ThreatID } else { '' }
-                    'Threat Status Error Code' = if ($det.PSObject.Properties.Match('ThreatStatusErrorCode')) { $det.ThreatStatusErrorCode } else { '' }
-                    'Threat Status ID' = if ($det.PSObject.Properties.Match('ThreatStatusID')) { $det.ThreatStatusID } else { '' }
+                    'Domain User'    = if ($defenderResults.PSObject.Properties.Match('DomainUser')) { $defenderResults.DomainUser } else { '' }
+                    'Threat Name'    = if ($defenderResults.PSObject.Properties.Match('ThreatName')) { $defenderResults.ThreatName } else { '' }
+                    'Action Success' = if ($defenderResults.PSObject.Properties.Match('ActionSuccess')) { $defenderResults.ActionSuccess } else { '' }
+                    'Initial Detection Time' = if ($defenderResults.PSObject.Properties.Match('InitialDetectionTime')) { $defenderResults.InitialDetectionTime } else { '' }
+                    'Last Threat Status Change Time' = if ($defenderResults.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $defenderResults.LastThreatStatusChangeTime } else { '' }
+                    'Process Name' = if ($defenderResults.PSObject.Properties.Match('ProcessName')) { $defenderResults.ProcessName } else { '' }
+                    'Remediation Time' = if ($defenderResults.PSObject.Properties.Match('RemediationTime')) { $defenderResults.RemediationTime } else { '' }
+                    'Threat ID' = if ($defenderResults.PSObject.Properties.Match('ThreatID')) { $defenderResults.ThreatID } else { '' }
+                    'Threat Status Error Code' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusErrorCode')) { $defenderResults.ThreatStatusErrorCode } else { '' }
+                    'Threat Status ID' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusID')) { $defenderResults.ThreatStatusID } else { '' }
                     'Status'         = 'Detected'
                 }
                 try {
@@ -241,34 +236,58 @@ foreach ($hostName in $domainHostNames) {
                 } catch {
                     Write-Host "Error appending to CSV: $_"
                 }
+            } elseif ($defenderResults -eq "No threats detected.") {
+                $resultObj = [PSCustomObject]@{
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
+                    'Computer Name'  = $hostName
+                    'Domain User'    = ""
+                    'Threat Name'    = ""
+                    'Action Success' = ""
+                    'Initial Detection Time' = ""
+                    'Last Threat Status Change Time' = ""
+                    'Process Name' = ""
+                    'Remediation Time' = ""
+                    'Threat ID' = ""
+                    'Threat Status Error Code' = ""
+                    'Threat Status ID' = ""
+                    'Status'         = 'No threats detected'
+                }
+                try {
+                    $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                    Write-Host "No threats for $hostName, added to CSV."
+                } catch {
+                    Write-Host "Error appending to CSV: $_"
+                }
+            } else {
+                $resultObj = [PSCustomObject]@{
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
+                    'Computer Name'  = $hostName
+                    'Domain User'    = ""
+                    'Threat Name'    = ""
+                    'Action Success' = ""
+                    'Initial Detection Time' = ""
+                    'Last Threat Status Change Time' = ""
+                    'Process Name' = ""
+                    'Remediation Time' = ""
+                    'Threat ID' = ""
+                    'Threat Status Error Code' = ""
+                    'Threat Status ID' = ""
+                    'Status'         = "Unknown result: $defenderResults"
+                }
+                try {
+                    $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                    Write-Host "Unknown result for $hostName, added to CSV."
+                } catch {
+                    Write-Host "Error appending to CSV: $_"
+                }
             }
-        } elseif ($defenderResults -is [PSCustomObject]) {
+        } catch {
+            $errorMsg = $_.ToString()
             $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
-                'Computer Name'  = $hostName
-                'Domain User'    = if ($defenderResults.PSObject.Properties.Match('DomainUser')) { $defenderResults.DomainUser } elseif ($defenderResults.DomainUser) { $defenderResults.DomainUser } else { '' }
-                'Threat Name'    = if ($defenderResults.PSObject.Properties.Match('ThreatName')) { $defenderResults.ThreatName } else { '' }
-                'Action Success' = if ($defenderResults.PSObject.Properties.Match('ActionSuccess')) { $defenderResults.ActionSuccess } else { '' }
-                'Initial Detection Time' = if ($defenderResults.PSObject.Properties.Match('InitialDetectionTime')) { $defenderResults.InitialDetectionTime } else { '' }
-                'Last Threat Status Change Time' = if ($defenderResults.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $defenderResults.LastThreatStatusChangeTime } else { '' }
-                'Process Name' = if ($defenderResults.PSObject.Properties.Match('ProcessName')) { $defenderResults.ProcessName } else { '' }
-                'Remediation Time' = if ($defenderResults.PSObject.Properties.Match('RemediationTime')) { $defenderResults.RemediationTime } else { '' }
-                'Threat ID' = if ($defenderResults.PSObject.Properties.Match('ThreatID')) { $defenderResults.ThreatID } else { '' }
-                'Threat Status Error Code' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusErrorCode')) { $defenderResults.ThreatStatusErrorCode } else { '' }
-                'Threat Status ID' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusID')) { $defenderResults.ThreatStatusID } else { '' }
-                'Status'         = 'Detected'
-            }
-            try {
-                $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "Defender detection for $hostName added to CSV."
-            } catch {
-                Write-Host "Error appending to CSV: $_"
-            }
-        } elseif ($defenderResults -eq "No threats detected.") {
-            $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
+                'MAC Address'    = $macAddress
+                'IP Address'     = $ipAddress
                 'Computer Name'  = $hostName
                 'Domain User'    = ""
                 'Threat Name'    = ""
@@ -280,139 +299,124 @@ foreach ($hostName in $domainHostNames) {
                 'Threat ID' = ""
                 'Threat Status Error Code' = ""
                 'Threat Status ID' = ""
-                'Status'         = 'No threats detected'
+                'Status'         = "Connection failed: $errorMsg"
             }
             try {
                 $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "No threats for $hostName, added to CSV."
-            } catch {
-                Write-Host "Error appending to CSV: $_"
-            }
-        } else {
-            $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
-                'Computer Name'  = $hostName
-                'Domain User'    = ""
-                'Threat Name'    = ""
-                'Action Success' = ""
-                'Initial Detection Time' = ""
-                'Last Threat Status Change Time' = ""
-                'Process Name' = ""
-                'Remediation Time' = ""
-                'Threat ID' = ""
-                'Threat Status Error Code' = ""
-                'Threat Status ID' = ""
-                'Status'         = "Unknown result: $defenderResults"
-            }
-            try {
-                $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "Unknown result for $hostName, added to CSV."
+                Write-Host "Defender error for $hostName added to CSV."
             } catch {
                 Write-Host "Error appending to CSV: $_"
             }
         }
     } catch {
-        $errorMsg = $_.ToString()
-        $resultObj = [PSCustomObject]@{
-            'MAC Address'    = $mac
-            'IP Address'     = $ipv4
-            'Computer Name'  = $hostName
-            'Domain User'    = ""
-            'Threat Name'    = ""
-            'Action Success' = ""
-            'Initial Detection Time' = ""
-            'Last Threat Status Change Time' = ""
-            'Process Name' = ""
-            'Remediation Time' = ""
-            'Threat ID' = ""
-            'Threat Status Error Code' = ""
-            'Threat Status ID' = ""
-            'Status'         = "Connection failed: $errorMsg"
-        }
-        try {
-            $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-            Write-Host "Defender error for $hostName added to CSV."
-        } catch {
-            Write-Host "Error appending to CSV: $_"
-        }
+        Write-Host "An error occurred processing hostname $hostName. Skipping to next."
+        continue
     }
 }
 
-# Loop through each workgroup host (with per-host credentials)
+# Loop through each workgroup host
 foreach ($workgroupHost in $workgroupHosts) {
     $hostName = $workgroupHost.IP
     $workgroupUsername = if ($workgroupHost.Username) { $workgroupHost.Username } else { $defaultWorkgroupUsername }
     $workgroupPassword = if ($workgroupHost.Password) { $workgroupHost.Password } else { $defaultWorkgroupPassword }
+    
     Write-Host ""
-    Write-Host "Processing Workgroup Hostname: $hostName"
-    $netInfo = Get-HostNetworkInfo -ComputerName $hostName -IsWorkgroup:$true -Username $workgroupUsername -Password $workgroupPassword
-    $ipv4 = if ($netInfo.IPv4) { [string]$netInfo.IPv4 } else { "N/A" }
-    $mac = if ($netInfo.MAC) { $netInfo.MAC } else { "N/A" }
-
-    # Try to get the actual hostname from the remote machine
-    $actualHostName = $null
     try {
-        $securePassword = ConvertTo-SecureString $workgroupPassword -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential ($workgroupUsername, $securePassword)
-        $actualHostName = Invoke-Command -ComputerName $hostName -Credential $cred -ScriptBlock {
-            try {
-                $cs = Get-CimInstance -ClassName Win32_ComputerSystem
-                if ($cs -and $cs.Name) { return $cs.Name }
-                else { return $env:COMPUTERNAME }
-            } catch {
-                return $env:COMPUTERNAME
-            }
-        } -ErrorAction Stop
-    } catch {
-        $actualHostName = $hostName
-    }
-    if (-not $actualHostName) { $actualHostName = $hostName }
+        Write-Host "Processing Workgroup Host: $hostName"
+        
+        $netInfo = Get-HostNetworkInfo -ComputerName $hostName -IsWorkgroup:$true -Username $workgroupUsername -Password $workgroupPassword
+        $ipAddress = if ($netInfo.IPv4) { $netInfo.IPv4 } else { "N/A" }
+        $macAddress = if ($netInfo.MAC) { $netInfo.MAC } else { "N/A" }
 
-    try {
-        $securePassword = ConvertTo-SecureString $workgroupPassword -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential ($workgroupUsername, $securePassword)
-        $defenderResults = Invoke-Command -ComputerName $hostName -ScriptBlock {
-            try {
-                $detections = Get-MpThreatDetection
-                if ($detections) {
-                    return $detections | ForEach-Object {
-                        [PSCustomObject]@{
-                            ThreatName = if ($_.Resources) { ($_.Resources -join ", ") } elseif ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
-                            ActionSuccess = if ($_.ActionSuccess) { $_.ActionSuccess.ToString() } else { "" }
-                            InitialDetectionTime = if ($_.InitialDetectionTime) { $_.InitialDetectionTime.ToString() } else { "" }
-                            LastThreatStatusChangeTime = if ($_.LastThreatStatusChangeTime) { $_.LastThreatStatusChangeTime.ToString() } else { "" }
-                            ProcessName = if ($_.ProcessName) { $_.ProcessName.ToString() } else { "" }
-                            RemediationTime = if ($_.RemediationTime) { $_.RemediationTime.ToString() } else { "" }
-                            ThreatID = if ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
-                            ThreatStatusErrorCode = if ($_.ThreatStatusErrorCode -ne $null) { $_.ThreatStatusErrorCode.ToString() } elseif ($_.PSObject.Properties.Match('ThreatStatusErrorCode')) { $_.PSObject.Properties['ThreatStatusErrorCode'].Value } else { "" }
-                            ThreatStatusID = if ($_.ThreatStatusID) { $_.ThreatStatusID.ToString() } else { "" }
-                            DomainUser = if ($_.DomainUser) { $_.DomainUser } else { "" }
-                        }
-                    }
-                } else {
-                    return "No threats detected."
+        # Get actual hostname
+        $actualHostName = $null
+        try {
+            $securePassword = ConvertTo-SecureString $workgroupPassword -AsPlainText -Force
+            $cred = New-Object System.Management.Automation.PSCredential ($workgroupUsername, $securePassword)
+            $actualHostName = Invoke-Command -ComputerName $hostName -Credential $cred -ScriptBlock {
+                try {
+                    $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+                    if ($cs -and $cs.Name) { return $cs.Name }
+                    else { return $env:COMPUTERNAME }
+                } catch {
+                    return $env:COMPUTERNAME
                 }
-            } catch {
-                return "Windows Defender not accessible."
-            }
-        } -Credential $cred -ErrorAction Stop
-        if ($defenderResults -is [System.Array]) {
-            foreach ($det in $defenderResults) {
+            } -ErrorAction Stop
+        } catch {
+            $actualHostName = $hostName
+        }
+        if (-not $actualHostName) { $actualHostName = $hostName }
+
+        try {
+            $securePassword = ConvertTo-SecureString $workgroupPassword -AsPlainText -Force
+            $cred = New-Object System.Management.Automation.PSCredential ($workgroupUsername, $securePassword)
+            
+            $defenderResults = Invoke-Command -ComputerName $hostName -Credential $cred -ScriptBlock {
+                try {
+                    $detections = Get-MpThreatDetection
+                    if ($detections) {
+                        return $detections | ForEach-Object {
+                            [PSCustomObject]@{
+                                ThreatName = if ($_.Resources) { ($_.Resources -join ", ") } elseif ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
+                                ActionSuccess = if ($_.ActionSuccess) { $_.ActionSuccess.ToString() } else { "" }
+                                InitialDetectionTime = if ($_.InitialDetectionTime) { $_.InitialDetectionTime.ToString() } else { "" }
+                                LastThreatStatusChangeTime = if ($_.LastThreatStatusChangeTime) { $_.LastThreatStatusChangeTime.ToString() } else { "" }
+                                ProcessName = if ($_.ProcessName) { $_.ProcessName.ToString() } else { "" }
+                                RemediationTime = if ($_.RemediationTime) { $_.RemediationTime.ToString() } else { "" }
+                                ThreatID = if ($_.ThreatID) { $_.ThreatID.ToString() } else { "" }
+                                ThreatStatusErrorCode = if ($_.ThreatStatusErrorCode -ne $null) { $_.ThreatStatusErrorCode.ToString() } elseif ($_.PSObject.Properties.Match('ThreatStatusErrorCode')) { $_.PSObject.Properties['ThreatStatusErrorCode'].Value } else { "" }
+                                ThreatStatusID = if ($_.ThreatStatusID) { $_.ThreatStatusID.ToString() } else { "" }
+                                DomainUser = if ($_.DomainUser) { $_.DomainUser } else { "" }
+                            }
+                        }
+                    } else {
+                        return "No threats detected."
+                    }
+                } catch {
+                    return "Windows Defender not accessible."
+                }
+            } -ErrorAction Stop
+            
+            if ($defenderResults -is [System.Array]) {
+                foreach ($det in $defenderResults) {
+                    $resultObj = [PSCustomObject]@{
+                        'MAC Address'    = $macAddress
+                        'IP Address'     = $ipAddress
+                        'Computer Name'  = $actualHostName
+                        'Domain User'    = if ($det.PSObject.Properties.Match('DomainUser')) { $det.DomainUser } else { '' }
+                        'Threat Name'    = if ($det.PSObject.Properties.Match('ThreatName')) { $det.ThreatName } else { '' }
+                        'Action Success' = if ($det.PSObject.Properties.Match('ActionSuccess')) { $det.ActionSuccess } else { '' }
+                        'Initial Detection Time' = if ($det.PSObject.Properties.Match('InitialDetectionTime')) { $det.InitialDetectionTime } else { '' }
+                        'Last Threat Status Change Time' = if ($det.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $det.LastThreatStatusChangeTime } else { '' }
+                        'Process Name' = if ($det.PSObject.Properties.Match('ProcessName')) { $det.ProcessName } else { '' }
+                        'Remediation Time' = if ($det.PSObject.Properties.Match('RemediationTime')) { $det.RemediationTime } else { '' }
+                        'Threat ID' = if ($det.PSObject.Properties.Match('ThreatID')) { $det.ThreatID } else { '' }
+                        'Threat Status Error Code' = if ($det.PSObject.Properties.Match('ThreatStatusErrorCode')) { $det.ThreatStatusErrorCode } else { '' }
+                        'Threat Status ID' = if ($det.PSObject.Properties.Match('ThreatStatusID')) { $det.ThreatStatusID } else { '' }
+                        'Status'         = 'Detected'
+                    }
+                    try {
+                        $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                        Write-Host "Defender detection for $actualHostName ($hostName) added to CSV."
+                    } catch {
+                        Write-Host "Error appending to CSV: $_"
+                    }
+                }
+            } elseif ($defenderResults -is [PSCustomObject]) {
                 $resultObj = [PSCustomObject]@{
-                    'MAC Address'    = $mac
-                    'IP Address'     = $ipv4
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
                     'Computer Name'  = $actualHostName
-                    'Domain User'    = if ($det.PSObject.Properties.Match('DomainUser')) { $det.DomainUser } elseif ($_.DomainUser) { $_.DomainUser } else { '' }
-                    'Threat Name'    = if ($det.PSObject.Properties.Match('ThreatName')) { $det.ThreatName } else { '' }
-                    'Action Success' = if ($det.PSObject.Properties.Match('ActionSuccess')) { $det.ActionSuccess } else { '' }
-                    'Initial Detection Time' = if ($det.PSObject.Properties.Match('InitialDetectionTime')) { $det.InitialDetectionTime } else { '' }
-                    'Last Threat Status Change Time' = if ($det.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $det.LastThreatStatusChangeTime } else { '' }
-                    'Process Name' = if ($det.PSObject.Properties.Match('ProcessName')) { $det.ProcessName } else { '' }
-                    'Remediation Time' = if ($det.PSObject.Properties.Match('RemediationTime')) { $det.RemediationTime } else { '' }
-                    'Threat ID' = if ($det.PSObject.Properties.Match('ThreatID')) { $det.ThreatID } else { '' }
-                    'Threat Status Error Code' = if ($det.PSObject.Properties.Match('ThreatStatusErrorCode')) { $det.ThreatStatusErrorCode } else { '' }
-                    'Threat Status ID' = if ($det.PSObject.Properties.Match('ThreatStatusID')) { $det.ThreatStatusID } else { '' }
+                    'Domain User'    = if ($defenderResults.PSObject.Properties.Match('DomainUser')) { $defenderResults.DomainUser } else { '' }
+                    'Threat Name'    = if ($defenderResults.PSObject.Properties.Match('ThreatName')) { $defenderResults.ThreatName } else { '' }
+                    'Action Success' = if ($defenderResults.PSObject.Properties.Match('ActionSuccess')) { $defenderResults.ActionSuccess } else { '' }
+                    'Initial Detection Time' = if ($defenderResults.PSObject.Properties.Match('InitialDetectionTime')) { $defenderResults.InitialDetectionTime } else { '' }
+                    'Last Threat Status Change Time' = if ($defenderResults.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $defenderResults.LastThreatStatusChangeTime } else { '' }
+                    'Process Name' = if ($defenderResults.PSObject.Properties.Match('ProcessName')) { $defenderResults.ProcessName } else { '' }
+                    'Remediation Time' = if ($defenderResults.PSObject.Properties.Match('RemediationTime')) { $defenderResults.RemediationTime } else { '' }
+                    'Threat ID' = if ($defenderResults.PSObject.Properties.Match('ThreatID')) { $defenderResults.ThreatID } else { '' }
+                    'Threat Status Error Code' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusErrorCode')) { $defenderResults.ThreatStatusErrorCode } else { '' }
+                    'Threat Status ID' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusID')) { $defenderResults.ThreatStatusID } else { '' }
                     'Status'         = 'Detected'
                 }
                 try {
@@ -421,34 +425,58 @@ foreach ($workgroupHost in $workgroupHosts) {
                 } catch {
                     Write-Host "Error appending to CSV: $_"
                 }
+            } elseif ($defenderResults -eq "No threats detected.") {
+                $resultObj = [PSCustomObject]@{
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
+                    'Computer Name'  = $actualHostName
+                    'Domain User'    = ""
+                    'Threat Name'    = ""
+                    'Action Success' = ""
+                    'Initial Detection Time' = ""
+                    'Last Threat Status Change Time' = ""
+                    'Process Name' = ""
+                    'Remediation Time' = ""
+                    'Threat ID' = ""
+                    'Threat Status Error Code' = ""
+                    'Threat Status ID' = ""
+                    'Status'         = 'No threats detected'
+                }
+                try {
+                    $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                    Write-Host "No threats for $actualHostName ($hostName), added to CSV."
+                } catch {
+                    Write-Host "Error appending to CSV: $_"
+                }
+            } else {
+                $resultObj = [PSCustomObject]@{
+                    'MAC Address'    = $macAddress
+                    'IP Address'     = $ipAddress
+                    'Computer Name'  = $actualHostName
+                    'Domain User'    = ""
+                    'Threat Name'    = ""
+                    'Action Success' = ""
+                    'Initial Detection Time' = ""
+                    'Last Threat Status Change Time' = ""
+                    'Process Name' = ""
+                    'Remediation Time' = ""
+                    'Threat ID' = ""
+                    'Threat Status Error Code' = ""
+                    'Threat Status ID' = ""
+                    'Status'         = "Unknown result: $defenderResults"
+                }
+                try {
+                    $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
+                    Write-Host "Unknown result for $actualHostName ($hostName), added to CSV."
+                } catch {
+                    Write-Host "Error appending to CSV: $_"
+                }
             }
-        } elseif ($defenderResults -is [PSCustomObject]) {
+        } catch {
+            $errorMsg = $_.ToString()
             $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
-                'Computer Name'  = $actualHostName
-                'Domain User'    = if ($defenderResults.PSObject.Properties.Match('DomainUser')) { $defenderResults.DomainUser } elseif ($defenderResults.DomainUser) { $defenderResults.DomainUser } else { '' }
-                'Threat Name'    = if ($defenderResults.PSObject.Properties.Match('ThreatName')) { $defenderResults.ThreatName } else { '' }
-                'Action Success' = if ($defenderResults.PSObject.Properties.Match('ActionSuccess')) { $defenderResults.ActionSuccess } else { '' }
-                'Initial Detection Time' = if ($defenderResults.PSObject.Properties.Match('InitialDetectionTime')) { $defenderResults.InitialDetectionTime } else { '' }
-                'Last Threat Status Change Time' = if ($defenderResults.PSObject.Properties.Match('LastThreatStatusChangeTime')) { $defenderResults.LastThreatStatusChangeTime } else { '' }
-                'Process Name' = if ($defenderResults.PSObject.Properties.Match('ProcessName')) { $defenderResults.ProcessName } else { '' }
-                'Remediation Time' = if ($defenderResults.PSObject.Properties.Match('RemediationTime')) { $defenderResults.RemediationTime } else { '' }
-                'Threat ID' = if ($defenderResults.PSObject.Properties.Match('ThreatID')) { $defenderResults.ThreatID } else { '' }
-                'Threat Status Error Code' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusErrorCode')) { $defenderResults.ThreatStatusErrorCode } else { '' }
-                'Threat Status ID' = if ($defenderResults.PSObject.Properties.Match('ThreatStatusID')) { $defenderResults.ThreatStatusID } else { '' }
-                'Status'         = 'Detected'
-            }
-            try {
-                $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "Defender detection for $actualHostName ($hostName) added to CSV."
-            } catch {
-                Write-Host "Error appending to CSV: $_"
-            }
-        } elseif ($defenderResults -eq "No threats detected.") {
-            $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
+                'MAC Address'    = $macAddress
+                'IP Address'     = $ipAddress
                 'Computer Name'  = $actualHostName
                 'Domain User'    = ""
                 'Threat Name'    = ""
@@ -460,62 +488,18 @@ foreach ($workgroupHost in $workgroupHosts) {
                 'Threat ID' = ""
                 'Threat Status Error Code' = ""
                 'Threat Status ID' = ""
-                'Status'         = 'No threats detected'
+                'Status'         = "Connection failed: $errorMsg"
             }
             try {
                 $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "No threats for $actualHostName ($hostName), added to CSV."
-            } catch {
-                Write-Host "Error appending to CSV: $_"
-            }
-        } else {
-            $resultObj = [PSCustomObject]@{
-                'MAC Address'    = $mac
-                'IP Address'     = $ipv4
-                'Computer Name'  = $actualHostName
-                'Domain User'    = ""
-                'Threat Name'    = ""
-                'Action Success' = ""
-                'Initial Detection Time' = ""
-                'Last Threat Status Change Time' = ""
-                'Process Name' = ""
-                'Remediation Time' = ""
-                'Threat ID' = ""
-                'Threat Status Error Code' = ""
-                'Threat Status ID' = ""
-                'Status'         = "Unknown result: $defenderResults"
-            }
-            try {
-                $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-                Write-Host "Unknown result for $actualHostName ($hostName), added to CSV."
+                Write-Host "Defender error for $actualHostName ($hostName) added to CSV."
             } catch {
                 Write-Host "Error appending to CSV: $_"
             }
         }
     } catch {
-        $errorMsg = $_.ToString()
-        $resultObj = [PSCustomObject]@{
-            'MAC Address'    = $mac
-            'IP Address'     = $ipv4
-            'Computer Name'  = $actualHostName
-            'Domain User'    = ""
-            'Threat Name'    = ""
-            'Action Success' = ""
-            'Initial Detection Time' = ""
-            'Last Threat Status Change Time' = ""
-            'Process Name' = ""
-            'Remediation Time' = ""
-            'Threat ID' = ""
-            'Threat Status Error Code' = ""
-            'Threat Status ID' = ""
-            'Status'         = "Connection failed: $errorMsg"
-        }
-        try {
-            $resultObj | Select-Object $csvColumns | Export-Csv -LiteralPath $outputFile -NoTypeInformation -Force -Append
-            Write-Host "Defender error for $actualHostName ($hostName) added to CSV."
-        } catch {
-            Write-Host "Error appending to CSV: $_"
-        }
+        Write-Host "An error occurred processing workgroup host $hostName. Skipping to next."
+        continue
     }
 }
 
