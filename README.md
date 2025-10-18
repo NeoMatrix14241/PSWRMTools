@@ -1,6 +1,6 @@
 # WRM Tools Setup Guide
 
-> **2 versions of defender are there (because of not being a member of domain) so:**  
+> **2 versions of defender and S.M.A.R.T. are there (because of not being a member of domain) so:**  
 > - No MAC addresses for you :)  
 > - We use IPv4 address and hostname this time because we are not stupid.
 
